@@ -2,6 +2,7 @@ import typing
 import re
 import sys
 import os
+import glob
 
 class LexerError(Exception):
     def __init__(self, message, line, pos):
@@ -190,11 +191,15 @@ def lex_line(l: Lexer):
 
     # branching
     if l.next_matchs(["label", "goto", "if-goto"]):
-        pass
+        return lex_branching
 
     # function
-    if l.next_matchs(["function", "call", "return"]):
-        pass
+    if l.next_matchs(["function", "call"]):
+        return lex_function
+    
+    # function return
+    if l.next_match("return"):
+        return lex_function_return
 
     raise SyntaxError("unknown command", l.line, l.pos)
 
@@ -225,12 +230,12 @@ def lex_memory_access(l: Lexer):
     cmd_tok = l._push_tok(TOK_CMD)
     ignore_blank(l)
 
-    # get the segment
+    # "segment"
     l.accept_r(r"\w")
     l._push_tok(TOK_ARG)
     ignore_blank(l)
 
-    # get the value
+    # "i"
     l.accept_r(r"\d")
     l._push_tok(l)
 
@@ -241,24 +246,139 @@ def lex_memory_access(l: Lexer):
 
     return lex_end_line
 
+def lex_branching(l: Lexer):
+    print("-> branching")
+
+    cmd_str = l._push_tok(TOK_CMD).value
+    cmd_type = C_LABEL
+    if cmd_str == "goto":
+        cmd_type = C_GOTO
+    elif cmd_str == "if-goto":
+        cmd_type = C_IF
+
+    ignore_blank(l)
+
+    # "label"
+    l.accept_r(r"[\w_.$:]")
+    l._push_tok(TOK_ARG)
+
+    l._push_cmd(cmd_type)
+
+    return lex_end_line
+
+def lex_function(l: Lexer):
+    print("-> function")
+
+    cmd_str = l._push_tok(TOK_CMD).value
+    cmd_type = C_FUNCTION
+    if cmd_str == "call":
+        cmd_type = C_CALL
+
+    ignore_blank(l)
+
+    # "functionName"
+    l.accept_r(r"[\w_.$:]")
+    l._push_tok(TOK_ARG)
+    ignore_blank(l)
+    
+    # "nArgs"
+    l.accept_r(r"\d")
+    l._push_tok(TOK_ARG)
+
+    l._push_cmd(cmd_type)
+
+    return lex_end_line
+
+def lex_function_return(l: Lexer):
+    print("-> function return")
+
+    l._push_tok(TOK_CMD)
+    l._push_cmd(C_RETURN)
+    return lex_end_line
+
 R_COPY_VAL = "R13"
 R_COPY_POINTER = "R14"
+R_RET_ADDRESS = "R15"
 
 class AsmTempl:
     def __init__(self):
         pass
-    
+
     @staticmethod
-    def load_constant_to_d(constant):
+    def repeat(func, times=1):
+        times = int(times)
+        __c = ""
+        while times > 0:
+            __c += func()
+            times -= 1
+
+        return __c
+
+    @staticmethod
+    def c__vm_begin_bootstrap():
         return f"""\
-@{constant}
-D=A
+// ---- VM Translator for Hack platform ----
+// Author: barrydevp
+// -----------------------
+
+// === VM Initialize code _ BEGIN ===
+"""
+
+    @staticmethod
+    def c__sys_bootstrap():
+        return f"""// Bootstrap code
+{AsmTempl.load_constant("256", "D")}\
+{AsmTempl.write_to_register("SP", "D")}\
+{AsmTempl.call_function("Sys.init", 0, 0)}\
 """
     
-    # this function will compute and set "to" register to (mem value from base + offset)
-    # "to" = *base + offset
     @staticmethod
-    def load_address(base, offset, to="A"):
+    def c__vm_end_bootstrap():
+        return f"""\
+// === VM Initialize code _ END   ===
+    """
+
+    @staticmethod
+    def define_label(label):
+        return f"""\
+({label})
+"""
+    
+    @staticmethod
+    def goto_label(label):
+        return f"""\
+@{label}
+0;JMP
+"""
+
+    @staticmethod
+    def if_goto_label(label):
+        return f"""\
+{AsmTempl.pop_sp_to_d()}\
+@{label}
+D;JNE
+"""
+
+    @staticmethod
+    def jump_from_register(reg):
+        return f"""\
+@{reg}
+A=M
+0;JMP
+"""
+
+    # {dst} = {comp_bef}constant{comp_aft}
+    @staticmethod
+    def load_constant(constant, dst="D", comp_bef="", comp_aft=""):
+        return f"""\
+@{constant}
+{dst}={comp_bef}A{comp_aft}
+"""
+    
+    # this function will compute and set "to" register to (mem value from base) + offset
+    # "to" = M[base] + offset
+    @staticmethod
+    def load_address(base, offset, dst="A"):
         offset = int(offset)
 
         # load base
@@ -268,7 +388,7 @@ D=A
         if offset == 0:
             return f"""\
 {__c}\
-{to}=M
+{dst}=M
 """
 
         offset_sign = "+"
@@ -280,33 +400,50 @@ D=A
         if offset_val == 1:
             return f"""\
 {__c}\
-{to}=M{offset_sign}{offset_val}
+{dst}=M{offset_sign}{offset_val}
 """
         
         return f"""\
 {__c}\
 D=M
 @{offset_val}
-{to}=D{offset_sign}A
+{dst}=D{offset_sign}A
 """
 
-    # increase sp pointer
     @staticmethod
-    def dec_sp():
+    def read_address(base, offset, dst="D"):
         return f"""\
-@SP
+{AsmTempl.load_address(base, offset)}\
+{dst}=M
+"""
+
+    # decrease pointer
+    @staticmethod
+    def dec_address(base):
+        return f"""\
+@{base}
 M=M-1
 A=M
 """
-    
-    # decrese sp pointer 
+
+    # decrease sp pointer
     @staticmethod
-    def inc_sp():
+    def dec_sp():
+        return AsmTempl.dec_address("SP")    
+
+    # increase pointer 
+    @staticmethod
+    def inc_address(base):
         return f"""\
-@SP
+@{base}
 M=M+1
 A=M
 """
+
+    # increase sp pointer 
+    @staticmethod
+    def inc_sp():
+        return AsmTempl.inc_address("SP")
 
     @staticmethod
     def pop_sp_to_d():
@@ -323,6 +460,21 @@ M=D
 {AsmTempl.inc_sp()}\
 """
 
+    # *SP = constant; SP++
+    @staticmethod
+    def push_constant_to_sp(constant):
+        return f"""\
+{AsmTempl.load_constant(constant, "D")}\
+{AsmTempl.push_d_to_sp()}\
+"""
+
+    @staticmethod
+    def push_register_to_sp(reg):
+        return f"""\
+{AsmTempl.read_register(reg, "D")}\
+{AsmTempl.push_d_to_sp()}\
+"""
+
     @staticmethod
     def stack_unary_op(op: str):
         # first load top of stack into D,
@@ -330,9 +482,7 @@ M=D
         # we do this without modified stack pointer (SP) for optimization 
         asm_code = f"""\
 {AsmTempl.load_address("SP", "-1")}\
-D=M
-D={op}D
-M=D
+M={op}M
 """
 
         return asm_code
@@ -345,8 +495,7 @@ M=D
         # load current top stack pointer and do arithmetic on M and D register
         asm_code += f"""\
 {AsmTempl.load_address("SP", "-1")}\
-D=M{op}D
-M=D
+M=M{op}D
 """
 
         return asm_code
@@ -365,58 +514,122 @@ M=-1
 D;J{op.upper()}
 {AsmTempl.load_address("SP", "-1")}\
 M=0
-({end_label})
+{AsmTempl.define_label(end_label)}
 """
 
+    # {dst} = R
+    # {dst} = {comp_bef}R{comp_aft} -> eg: {dst} = R + 1
     @staticmethod
-    def read_register_to_d(r):
+    def read_register(reg, dst="D", comp_bef="", comp_aft=""):
         return f"""\
-@{r}
-D=M
+@{reg}
+{dst}={comp_bef}M{comp_aft}
 """
 
+    # R = D
     @staticmethod
-    def write_d_to_register(r):
+    def write_to_register(reg, src="D"):
         return f"""\
-@{r}
-M=D
+@{reg}
+M={src}
 """
 
     @staticmethod
-    def pop_sp_to_register(r):
+    def pop_sp_to_register(reg):
         return f"""\
 {AsmTempl.pop_sp_to_d()}\
-{AsmTempl.write_d_to_register(r)}\
+{AsmTempl.write_to_register(reg)}\
 """
 
     @staticmethod
-    def read_segment_to_d(base, offset):
+    def pop_address_to_register(base, reg):
+        return f"""\
+{AsmTempl.dec_address(base)}\
+D=M
+{AsmTempl.write_to_register(reg, "D")}\
+"""
+
+    # {dst} = *(base + offset)
+    @staticmethod
+    def read_segment(base, offset, dst="D"):
         return f"""\
 {AsmTempl.load_address(base, offset)}\
-D=M
+{dst}=M
 """
-
+    
+    # *(base + offset) = {src}
     @staticmethod
-    def write_d_to_segment(base, offset):
+    def write_to_segment(base, offset, src="D"):
         return f"""\
-{AsmTempl.write_d_to_register(R_COPY_VAL)}\
+{AsmTempl.write_to_register(R_COPY_VAL, src)}\
 {AsmTempl.load_address(base, offset, "D")}\
-{AsmTempl.write_d_to_register(R_COPY_POINTER)}\
-{AsmTempl.read_register_to_d(R_COPY_VAL)}\
+{AsmTempl.write_to_register(R_COPY_POINTER, "D")}\
+{AsmTempl.read_register(R_COPY_VAL, "D")}\
 {AsmTempl.load_address(R_COPY_POINTER, "0")}\
 M=D
 """
 
+    # *(base + offset) = pop()
     @staticmethod
     def pop_sp_to_segment(base, offset):
         return f"""\
 {AsmTempl.load_address(base, offset, "D")}\
-{AsmTempl.write_d_to_register(R_COPY_POINTER)}\
+{AsmTempl.write_to_register(R_COPY_POINTER, "D")}\
 {AsmTempl.pop_sp_to_d()}\
 {AsmTempl.load_address(R_COPY_POINTER, "0")}\
 M=D
 """
 
+    @staticmethod
+    def g__restore_function_frame():
+        return f"""\
+{AsmTempl.read_register("LCL", "D")}\
+{AsmTempl.write_to_register(R_COPY_VAL, "D")}\
+{AsmTempl.read_address(R_COPY_VAL, "-5", "D")}\
+{AsmTempl.write_to_register(R_RET_ADDRESS, "D")}\
+{AsmTempl.pop_sp_to_segment("ARG", "0")}\
+{AsmTempl.load_address("ARG", "1", "D")}\
+{AsmTempl.write_to_register("SP", "D")}\
+{AsmTempl.pop_address_to_register(R_COPY_VAL, "THAT")}\
+{AsmTempl.pop_address_to_register(R_COPY_VAL, "THIS")}\
+{AsmTempl.pop_address_to_register(R_COPY_VAL, "ARG")}\
+{AsmTempl.pop_address_to_register(R_COPY_VAL, "LCL")}\
+{AsmTempl.jump_from_register(R_RET_ADDRESS)}\
+"""
+
+    @staticmethod
+    def define_function(func_name, n_lcl):
+        return f"""\
+{AsmTempl.define_label(func_name)}\
+{AsmTempl.load_constant("0", "D")}\
+{AsmTempl.repeat(
+    lambda : AsmTempl.push_d_to_sp(), n_lcl
+)}\
+"""
+
+    @staticmethod
+    def call_function(func_name, n_args, at_line):
+        ret_label = f"{func_name}$ret.{at_line}"
+
+        return f"""\
+{AsmTempl.push_constant_to_sp(ret_label)}\
+{AsmTempl.push_register_to_sp("LCL")}\
+{AsmTempl.push_register_to_sp("ARG")}\
+{AsmTempl.push_register_to_sp("THIS")}\
+{AsmTempl.push_register_to_sp("THAT")}\
+{AsmTempl.read_register("SP", "D")}\
+{AsmTempl.write_to_register("LCL", "D")}\
+{AsmTempl.load_constant(5 + int(n_args), "D", "D-")}\
+{AsmTempl.write_to_register("ARG", "D")}\
+{AsmTempl.goto_label(func_name)}
+{AsmTempl.define_label(ret_label)}\
+"""
+
+    @staticmethod
+    def return_function():
+        return f"""\
+{AsmTempl.g__restore_function_frame()}\
+"""
 
 class Generator:
     def __init__(self, file_name, cmds):
@@ -432,7 +645,7 @@ class Generator:
     def dec_arithmetic(self, cmd):
         op = cmd.tokens[0].value
 
-        asm_code = f"//{cmd}\n"
+        asm_code = ""
 
         if op == "neg":
             asm_code += AsmTempl.stack_unary_op("-")
@@ -462,24 +675,24 @@ class Generator:
         segment = cmd.tokens[1].value
         i = cmd.tokens[2].value
 
-        asm_code = f"//{cmd}\n"
+        asm_code = ""
 
         if segment == "constant":
-            asm_code += AsmTempl.load_constant_to_d(i)
+            asm_code += AsmTempl.load_constant(i)
         elif segment == "local":
-            asm_code += AsmTempl.read_segment_to_d("LCL", i)
+            asm_code += AsmTempl.read_segment("LCL", i)
         elif segment == "argument":
-            asm_code += AsmTempl.read_segment_to_d("ARG", i)
+            asm_code += AsmTempl.read_segment("ARG", i)
         elif segment == "this":
-            asm_code += AsmTempl.read_segment_to_d("THIS", i)
+            asm_code += AsmTempl.read_segment("THIS", i)
         elif segment == "that":
-            asm_code += AsmTempl.read_segment_to_d("THAT", i)
+            asm_code += AsmTempl.read_segment("THAT", i)
         elif segment == "static":
-            asm_code += AsmTempl.read_register_to_d(self.get_static_name(i))
+            asm_code += AsmTempl.read_register(self.get_static_name(i))
         elif segment == "pointer":
-            asm_code += AsmTempl.read_register_to_d("THIS" if i == "0" else "THAT")
+            asm_code += AsmTempl.read_register("THIS" if i == "0" else "THAT")
         elif segment == "temp":
-            asm_code += AsmTempl.read_register_to_d(f"R{int(i)+5}")
+            asm_code += AsmTempl.read_register(f"R{int(i)+5}")
         else:
             raise Exception(f"generator error. unknown memory access segment '{segment}'")
 
@@ -488,11 +701,11 @@ class Generator:
         return asm_code
 
     def dec_pop(self, cmd):
-        # push segment i
+        # pop segment i
         segment = cmd.tokens[1].value
         i = cmd.tokens[2].value
 
-        asm_code = f"//{cmd}\n"
+        asm_code = ""
 
         if segment == "local":
             asm_code += AsmTempl.pop_sp_to_segment("LCL", i)
@@ -513,22 +726,84 @@ class Generator:
 
         return asm_code
 
+    def dec_label(self, cmd):
+        # label label
+        label = cmd.tokens[1].value
+
+        return AsmTempl.define_label(label)
+
+    def dec_goto(self, cmd):
+        # goto label
+        label = cmd.tokens[1].value
+
+        return AsmTempl.goto_label(label)
+
+    def dec_if_goto(self, cmd):
+        # if-goto label
+        label = cmd.tokens[1].value
+
+        return AsmTempl.if_goto_label(label)
+
+    def dec_function(self, cmd):
+        # function functionName nArgs
+        func_name = cmd.tokens[1].value
+        # nArgs = number of local variables (LCL)
+        n_lcl = cmd.tokens[2].value
+
+        return AsmTempl.define_function(func_name, n_lcl)
+
+    def dec_call(self, cmd):
+        # called at
+        at_line = cmd.line
+        # function functionName nArgs
+        func_name = cmd.tokens[1].value
+        # nArgs = number of argument (ARG)
+        n_args = cmd.tokens[2].value
+
+        return AsmTempl.call_function(func_name, n_args, at_line)
+
+    def dec_return(self, cmd):
+
+        return AsmTempl.return_function()
+
     def decode_cmd(self, pos):
         cmd = self.cmds[pos]
         if cmd == None:
             raise Exception("generator error. null command")
+
+        asm_code = f"//{cmd}\n"
         
         if cmd.type == C_ARITHMETIC:
-            return self.dec_arithmetic(cmd)
+            pass
+            asm_code += self.dec_arithmetic(cmd)
+        elif cmd.type == C_PUSH:
+            pass
+            asm_code += self.dec_push(cmd)
+        elif cmd.type == C_POP:
+            pass
+            asm_code += self.dec_pop(cmd)
+        elif cmd.type == C_LABEL:
+            pass
+            asm_code += self.dec_label(cmd)
+        elif cmd.type == C_GOTO:
+            pass
+            asm_code += self.dec_goto(cmd)
+        elif cmd.type == C_IF:
+            pass
+            asm_code += self.dec_if_goto(cmd)
+        elif cmd.type == C_FUNCTION:
+            pass
+            asm_code += self.dec_function(cmd)
+        elif cmd.type == C_CALL:
+            pass
+            asm_code += self.dec_call(cmd)
+        elif cmd.type == C_RETURN:
+            pass
+            asm_code += self.dec_return(cmd)
+        else:
+            raise Exception("generator error. unknown command")
 
-        if cmd.type == C_PUSH:
-            return self.dec_push(cmd)
-
-        if cmd.type == C_POP:
-            return self.dec_pop(cmd)
-
-        raise Exception("generator error. unknown command")
-
+        return asm_code
 
     def run(self, outf):
         i = 0
@@ -537,23 +812,45 @@ class Generator:
             outf.write(asm_code + "\n")
             i+=1
 
-
-def main():
-    vm_file = sys.argv[1]
-
-    asm_file = vm_file.replace(".vm", ".asm") if vm_file.endswith(".vm") else (vm_file + ".asm")
-    if len(sys.argv) > 2:
-        asm_file = sys.argv[3]
-
+def translate(vm_file, writer):
+    print(f"=> Start translating {vm_file}")
     inf = open(vm_file, 'r')
     input = inf.read()
     inf.close()
     l = Lexer(input, lex_line)
     l.run()
+    # for cmd in l.cmds:
+    #     print(cmd)
+    g = Generator(os.path.basename(vm_file), l.cmds)
+    g.run(writer)
+
+def main():
+    input_name = sys.argv[1]
+    vm_source = [input_name]
+
+    asm_file = input_name.replace(".vm", ".asm")
+    if not input_name.endswith(".vm"):
+        asm_file = input_name + ".asm"
+        vm_source = glob.glob(f"{input_name}/*.vm")
+
+    if len(sys.argv) > 2:
+        asm_file = sys.argv[3]
 
     outf = open(asm_file, 'w')
-    g = Generator(os.path.basename(vm_file), l.cmds)
-    g.run(outf)
+
+    # writing vm bootstrap begin section
+    outf.write(AsmTempl.c__vm_begin_bootstrap() + '\n')
+    # check exists Sys.vm file and write bootstrap code
+    if "Sys.vm" in [file_path.split("/")[-1] for file_path in vm_source]:
+        print("Writing bootstrap code")
+        outf.write(AsmTempl.c__sys_bootstrap() + '\n')
+
+    # writing vm bootstrap end section
+    outf.write(AsmTempl.c__vm_end_bootstrap() + '\n')
+
+    # translating file by file
+    for vm_file in vm_source:
+        translate(vm_file, outf)
     outf.close()
 
 if __name__ == "__main__":
