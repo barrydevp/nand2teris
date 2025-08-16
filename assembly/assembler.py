@@ -25,26 +25,46 @@ TOK_JMP = 15
 
 EOF = None
 
+
 class LexerError(Exception):
     def __init__(self, message, line, pos):
         super().__init__(f"{message}. {line}:{pos}")
+
 
 class SyntaxError(LexerError):
     def __init__(self, message, line, pos):
         super().__init__(f"syntax error, {message}", line, pos)
 
+
 class SymbolTable:
     def __init__(self):
         self._symbols = {
-            'SP':0, 'LCL':1, 'ARG':2, 'THIS':3, 'THAT':4,
-            'R0':0, 'R1':1, 'R2':2, 'R3':3, 'R4':4, 'R5':5,
-            'R6':6, 'R7':7, 'R8':8, 'R9':9, 'R10':10, 'R11':11,
-            'R12':12, 'R13':13, 'R14':14, 'R15':15,
-            'SCREEN':0x4000, 'KBD':0x6000
+            "SP": 0,
+            "LCL": 1,
+            "ARG": 2,
+            "THIS": 3,
+            "THAT": 4,
+            "R0": 0,
+            "R1": 1,
+            "R2": 2,
+            "R3": 3,
+            "R4": 4,
+            "R5": 5,
+            "R6": 6,
+            "R7": 7,
+            "R8": 8,
+            "R9": 9,
+            "R10": 10,
+            "R11": 11,
+            "R12": 12,
+            "R13": 13,
+            "R14": 14,
+            "R15": 15,
+            "SCREEN": 0x4000,
+            "KBD": 0x6000,
         }
         self.register_count = 16
-    
-    
+
     def put(self, symbol, value):
         if value == None:
             if self.has(symbol):
@@ -69,35 +89,59 @@ class SymbolTable:
 
         return self.get(symbol)
 
+
 class Instruction:
-    def __init__(self, line, tokens = []):
+    def __init__(self, line, tokens=[]):
         self.line = line
         self.tokens = tokens
 
-    def relocate(self, symbol_table: SymbolTable):
+    def relocate(self, symbol_table: SymbolTable) -> None:
         raise Exception("not implemented")
 
-    def to_bin(self):
+    def to_bin(self) -> str:
         raise Exception("not implemented")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "NULL: (0)"
 
-_dest_codes = ['', 'M', 'D', 'MD', 'A', 'AM', 'AD', 'AMD']
-_comp_codes = { '0':'0101010',  '1':'0111111',  '-1':'0111010', 'D':'0001100', 
-                'A':'0110000',  '!D':'0001101', '!A':'0110001', '-D':'0001111', 
-                '-A':'0110011', 'D+1':'0011111','A+1':'0110111','D-1':'0001110', 
-                'A-1':'0110010','D+A':'0000010','D-A':'0010011','A-D':'0000111', 
-                'D&A':'0000000','D|A':'0010101',
-                '':'xxxxxxx',   '':'xxxxxxx',   '':'xxxxxxx',   '':'xxxxxxx', 
-                'M':'1110000',  '':'xxxxxxx',   '!M':'1110001', '':'xxxxxxx', 
-                '-M':'1110011', '':'xxxxxxx',   'M+1':'1110111','':'xxxxxxx', 
-                'M-1':'1110010','D+M':'1000010','D-M':'1010011','M-D':'1000111', 
-                'D&M':'1000000', 'D|M':'1010101' }
-_jump_codes = ['', 'JGT', 'JEQ', 'JGE', 'JLT', 'JNE', 'JLE', 'JMP']
+
+_dest_codes = ["", "M", "D", "MD", "A", "AM", "AD", "AMD"]
+_comp_codes = {
+    "0": "0101010",
+    "1": "0111111",
+    "-1": "0111010",
+    "D": "0001100",
+    "A": "0110000",
+    "!D": "0001101",
+    "!A": "0110001",
+    "-D": "0001111",
+    "-A": "0110011",
+    "D+1": "0011111",
+    "A+1": "0110111",
+    "D-1": "0001110",
+    "A-1": "0110010",
+    "D+A": "0000010",
+    "D-A": "0010011",
+    "A-D": "0000111",
+    "D&A": "0000000",
+    "D|A": "0010101",
+    "M": "1110000",
+    "!M": "1110001",
+    "-M": "1110011",
+    "M+1": "1110111",
+    "M-1": "1110010",
+    "D+M": "1000010",
+    "D-M": "1010011",
+    "M-D": "1000111",
+    "D&M": "1000000",
+    "D|M": "1010101",
+}
+_jump_codes = ["", "JGT", "JEQ", "JGE", "JLT", "JNE", "JLE", "JMP"]
+
 
 def bits(num):
     return bin(int(num))[2:]
+
 
 class InstructionA(Instruction):
     def __init__(self, line, tokens, symbol, address):
@@ -108,19 +152,28 @@ class InstructionA(Instruction):
     def relocate(self, symbol_table: SymbolTable):
         if self.address == None:
             if not symbol_table.has(self.symbol):
-                raise LexerError(f"relocate error. cannot find address of symbol {self.symbol}", self.line, self.tokens[1].pos)
+                raise LexerError(
+                    f"relocate error. cannot find address of symbol {self.symbol}",
+                    self.line,
+                    self.tokens[1].pos,
+                )
 
             self.address = symbol_table.relocate(self.symbol)
 
     def to_bin(self):
         addr_bin = bits(int(self.address))
         if len(addr_bin) > 15:
-            raise LexerError(f"address out of range [0 : 2^16-1] {self.address}", self.line, self.tokens[1].pos)
-        return '0' + addr_bin.zfill(15)
+            raise LexerError(
+                f"address out of range [0 : 2^16-1] {self.address}",
+                self.line,
+                self.tokens[1].pos,
+            )
+        return "0" + addr_bin.zfill(15)
 
     def __repr__(self):
         return f"@{self.address}: {self.to_bin()}"
-    
+
+
 class InstructionC(Instruction):
     def __init__(self, line, tokens, dest, comp, jump):
         super().__init__(line, tokens)
@@ -153,12 +206,14 @@ class InstructionC(Instruction):
     def __repr__(self):
         return f"{self.dest}={self.comp};{self.jump}: {self.to_bin()}"
 
+
 class Token:
     def __init__(self, type, value: str, pos, line):
         self.type = type
         self.pos = pos
         self.line = line
         self.value = value
+
 
 class Lexer:
     def __init__(self, input: str, lex_start, symbol_table: SymbolTable):
@@ -185,7 +240,7 @@ class Lexer:
         ch = self.peek()
 
         self.pos += 1
-        if ch == '\n':
+        if ch == "\n":
             self.line += 1
 
         return ch
@@ -194,7 +249,7 @@ class Lexer:
         self.pos -= 1
         ch = self.peek()
 
-        if ch == '\n':
+        if ch == "\n":
             self.line -= 1
 
     # consumes next char if its in valid set
@@ -215,13 +270,13 @@ class Lexer:
 
     # skip current line
     def skip_line(self):
-        self.pos += self.input[self.pos:].index('\n') + 1
+        self.pos += self.input[self.pos :].index("\n") + 1
         self.start = self.pos
         self.line += 1
 
-    def ignore(self, inc_line = False):
+    def ignore(self, inc_line=False):
         if inc_line:
-            self.line += self.input[self.start:self.pos].count('\n')
+            self.line += self.input[self.start : self.pos].count("\n")
         self.start = self.pos
 
     def _pop_tok(self):
@@ -229,7 +284,7 @@ class Lexer:
             return self.tokens.pop(0)
 
     def _push_tok(self, type):
-        token = Token(type, self.input[self.start:self.pos], self.start, self.line)
+        token = Token(type, self.input[self.start : self.pos], self.start, self.line)
         self.tokens.append(token)
         self.start = self.pos
 
@@ -247,10 +302,12 @@ class Lexer:
         for ins in self.ins:
             ins.relocate(self.symbol_table)
             print(ins)
-            outf.write(ins.to_bin() + '\n')
+            outf.write(ins.to_bin() + "\n")
+
 
 def is_alphanumeric(ch):
-    return re.match(r'^\w+$', ch)
+    return re.match(r"^\w+$", ch)
+
 
 def lex_line(l: Lexer):
     # print(f"tokens[] = {l.tokens}")
@@ -262,8 +319,8 @@ def lex_line(l: Lexer):
     if ch == EOF:
         return None
 
-    if ch == '/':
-        if l.next() != '/':
+    if ch == "/":
+        if l.next() != "/":
             raise SyntaxError("unknown one '/' character", l.line, l.pos)
         # reach comment -> ignore current line
         # print('reach comment, ignore line.')
@@ -272,12 +329,12 @@ def lex_line(l: Lexer):
 
     print(f"start with '{ch}' at {l.line}:{l.pos}")
 
-    if ch == '(':
+    if ch == "(":
         # TODO lex_label
         l.ignore()
         return lex_label
 
-    if ch == '@':
+    if ch == "@":
         # TODO lex_a_ins
         return lex_a_ins
 
@@ -285,25 +342,31 @@ def lex_line(l: Lexer):
     l.back()
     return lex_c_ins
 
+
 def lex_end_line(l: Lexer):
     l.accept(" \t")
     ch = l.next()
-    if ch == '/' and l.next() == '/':
+    if ch == "/" and l.next() == "/":
         l.skip_line()
-    elif ch != '\n':
+    elif ch != "\n":
         raise SyntaxError(f"unexpected end of line '{ch}'", l.line, l.pos)
 
     return lex_line
 
+
 def lex_label(l: Lexer):
     ch = l.next()
     # label must only starting with alphabetic or underscore
-    if not ch == None and not re.match(r'[A-Za-z_]', ch):
-        raise SyntaxError(f"label must only start with alphabetic or underscore, but got '{ch}'", l.line, l.pos)
+    if not ch == None and not re.match(r"[A-Za-z_]", ch):
+        raise SyntaxError(
+            f"label must only start with alphabetic or underscore, but got '{ch}'",
+            l.line,
+            l.pos,
+        )
 
     l.accept_r(r"[\w_.$:]")
     # ch = l.next()
-    # while is_alphanumeric(ch): 
+    # while is_alphanumeric(ch):
     #     ch = l.next()
 
     # l.back()
@@ -322,16 +385,21 @@ def lex_label(l: Lexer):
 
     return lex_end_line
 
+
 def lex_a_ins(l: Lexer):
     l._push_tok(TOK_ATSIGN)
 
     ch = l.next()
 
     if ch == None:
-        raise SyntaxError(f"A-instruction: unexpected format, must be '@symbol|number' but got '{ch}'", l.line, l.pos)
-    
+        raise SyntaxError(
+            f"A-instruction: unexpected format, must be '@symbol|number' but got '{ch}'",
+            l.line,
+            l.pos,
+        )
+
     # number
-    if '0' <= ch and ch <= '9':
+    if "0" <= ch and ch <= "9":
         l.accept_r(r"\d")
         token = l._push_tok(TOK_NUMBER)
         l.ins.append(InstructionA(token.line, l.tokens, token.value, token.value))
@@ -358,7 +426,12 @@ def lex_a_ins(l: Lexer):
         print(f"(A) @{token.value}")
         return lex_end_line
 
-    raise SyntaxError(f"A-instruction: unexpected format, must be '@symbol|number' but got '{ch}'", l.line, l.pos)
+    raise SyntaxError(
+        f"A-instruction: unexpected format, must be '@symbol|number' but got '{ch}'",
+        l.line,
+        l.pos,
+    )
+
 
 def lex_c_ins(l: Lexer):
     dest = None
@@ -377,7 +450,11 @@ def lex_c_ins(l: Lexer):
     # comp part
     if l.pos == l.start:
         # check if comp part is missing
-        raise SyntaxError(f"C-instruction: unexpected format, must be 'dest=comp;jump' but got '{l.input[l.start:l.pos]}'", l.line, l.pos)
+        raise SyntaxError(
+            f"C-instruction: unexpected format, must be 'dest=comp;jump' but got '{l.input[l.start:l.pos]}'",
+            l.line,
+            l.pos,
+        )
     token = l._push_tok(TOK_COMP)
     comp = token.value
 
@@ -399,23 +476,29 @@ def lex_c_ins(l: Lexer):
 
     return lex_end_line
 
+
 def main():
     asm_file = sys.argv[1]
 
-    hack_file = asm_file.replace(".asm", ".hack") if asm_file.endswith(".asm") else (asm_file + ".hack")
+    hack_file = (
+        asm_file.replace(".asm", ".hack")
+        if asm_file.endswith(".asm")
+        else (asm_file + ".hack")
+    )
     if len(sys.argv) > 2:
         hack_file = sys.argv[3]
 
-    inf = open(asm_file, 'r')
+    inf = open(asm_file, "r")
     input = inf.read()
     inf.close()
     symbol_table = SymbolTable()
     l = Lexer(input, lex_line, symbol_table)
     l.run()
     print(symbol_table._symbols)
-    outf = open(hack_file, 'w')
+    outf = open(hack_file, "w")
     l.assemble(outf)
     outf.close()
+
 
 if __name__ == "__main__":
     main()
