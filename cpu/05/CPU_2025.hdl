@@ -1,0 +1,80 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/5/CPU.hdl
+/**
+ * The Hack Central Processing unit (CPU).
+ * Parses the binary code in the instruction input and executes it according to the
+ * Hack machine language specification. In the case of a C-instruction, computes the
+ * function specified by the instruction. If the instruction specifies to read a memory
+ * value, the inM input is expected to contain this value. If the instruction specifies
+ * to write a value to the memory, sets the outM output to this value, sets the addressM
+ * output to the target address, and asserts the writeM output (when writeM = 0, any
+ * value may appear in outM).
+ * If the reset input is 0, computes the address of the next instruction and sets the
+ * pc output to that value. If the reset input is 1, sets pc to 0.
+ * Note: The outM and writeM outputs are combinational: they are affected by the
+ * instruction's execution during the current cycle. The addressM and pc outputs are
+ * clocked: although they are affected by the instruction's execution, they commit to
+ * their new values only in the next cycle.
+ */
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+	//// Replace this comment with your code.
+
+    // A register
+    ARegister(in=inA, load=loadA, out=oA, out[0..14]=addressM);
+    // D register
+    DRegister(in=outALU, load=loadD, out=oD);
+    // PC
+    PC(in=oA, load=jok, inc=true, reset=reset, out[0..14]=pc, out=oPC);
+    // Register(in=inPC, load=true, out=oPC);
+
+    // C-instruction: 1 1 1 a c1 c2 c3 c4 c5 c6 d1 d2 d3 j1 j2 j3
+    // A-instruction: 0 x x x x x x x x x x x x x x x x
+
+    Mux16(a=oA, b=inM, sel=instruction[12], out=yALU);
+    ALU(x=oD, y=yALU, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=outALU, out=outM, zr=zrALU, ng=ngALU);
+
+    // write to register
+    Mux16(a=instruction, b=outALU, sel=instruction[15], out=inA);
+    // Mux16(a=inA, b=outALU, sel=instruction[15], out=inD);
+    
+    // write dest and decision
+    Mux(a=true, b=instruction[5], sel=instruction[15], out=loadA);
+    Mux(a=false, b=instruction[4], sel=instruction[15], out=loadD);
+    Mux(a=false, b=instruction[3], sel=instruction[15], out=writeM);
+
+    // check jump
+    And(a=ngALU, b=instruction[2], out=j1ok);
+    And(a=zrALU, b=instruction[1], out=j2ok);
+    Or(a=ngALU, b=zrALU, out=nposALU);
+    Not(in=nposALU, out=posnzrALU);
+    And(a=posnzrALU, b=instruction[0], out=j3ok);
+    // no cond jump => actually we don't need this, bc when all bit are 1, it's always true
+    //And(a=instruction[2], b=instruction[1], out=ncondj1);
+    //And(a=ncondj1, b=instruction[0], out=ncondj);
+    // is jump?
+    Or(a=j1ok, b=j2ok, out=jok1);
+    Or(a=jok1, b=j3ok, out=jok2, out=jok3);
+    //Or(a=jok2, b=ncondj, out=jok3);
+    And(a=jok3, b=instruction[15], out=jok);
+    // is inc?
+    //Not(in=jok, out=njok);
+    //Not(in=reset, out=nreset);
+    //And(a=njok, b=nreset, out=incPC);
+    //Mux16(a=oPC, b=oA, sel=jok, out=inPC);
+    
+}

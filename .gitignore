@@ -1,0 +1,10 @@
+# Build artifacts
+/build/
+*.o
+*.out
+*.hack
+*.zip
+
+# Executables
+/assembly/assembler
+/vmtranslator/vmtranslator
